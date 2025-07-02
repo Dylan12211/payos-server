@@ -1,23 +1,30 @@
 const express = require("express");
 const crypto = require("crypto");
 const admin = require("firebase-admin");
+const axios = require("axios");
+require("dotenv").config();
 
 const app = express();
 
+// Parse JSON và lưu rawBody để verify signature PayOS
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
   }
 }));
 
-const serviceAccount = require("./serviceAccountKey.json");
+// Initialize Firebase Admin
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_KEY);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
 });
 const db = admin.firestore();
 
-const CHECKSUM_KEY = "2231fe03bf9676c6287ded8d16b8f9c678611618c69abd721a956777b23d33cb";
+// PAYOS CONFIG
+const CHECKSUM_KEY = process.env.PAYOS_CHECKSUM_KEY;
+const PAYOS_CLIENT_ID = process.env.PAYOS_CLIENT_ID;
+const PAYOS_API_KEY = process.env.PAYOS_API_KEY;
 
 // ✅ Hàm sort key object
 function sortObjByKey(obj) {
@@ -42,6 +49,54 @@ function convertObjToQueryStr(obj) {
     .join("&");
 }
 
+// ✅ Tạo đơn hàng
+app.post("/create-order", async (req, res) => {
+  try {
+    const { userId, userName, userEmail } = req.body;
+
+    if (!userId || !userName || !userEmail) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const orderCode = `ORDER_${userId}_${Date.now()}`;
+
+    const response = await axios.post(
+      "https://api.payos.vn/v2/payment-requests",
+      {
+        orderCode: orderCode,
+        amount: 20000, // 20,000 VND
+        description: `Nâng cấp Premium cho ${userName}`,
+        buyerName: userName,
+        buyerEmail: userEmail,
+        buyerPhone: "0123456789",
+        cancelUrl: "https://google.com",
+        returnUrl: "https://google.com"
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-client-id": PAYOS_CLIENT_ID,
+          "x-api-key": PAYOS_API_KEY,
+        },
+      }
+    );
+
+    const data = response.data;
+
+    if (data.data && data.data.checkoutUrl) {
+      console.log("✅ Created payment link:", data.data.checkoutUrl);
+      res.json({ paymentUrl: data.data.checkoutUrl });
+    } else {
+      console.error("❌ Error from PayOS:", data);
+      res.status(500).json({ error: "Failed to create payment link" });
+    }
+  } catch (error) {
+    console.error("❌ Create order error:", error.response?.data || error.message);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ✅ Nhận webhook PayOS
 app.post("/payos-webhook", async (req, res) => {
   try {
     console.log("🔔 Nhận webhook PayOS");
@@ -74,11 +129,6 @@ app.post("/payos-webhook", async (req, res) => {
     const userId = data.note || "unknown_user";
     const amount = data.amount;
 
-    if (!userId) {
-      console.error("❌ Missing userId in note");
-      return res.status(400).send("Missing userId in note");
-    }
-
     const activatedAt = admin.firestore.Timestamp.now();
     const expiredAt = admin.firestore.Timestamp.fromDate(
       new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
@@ -100,4 +150,5 @@ app.post("/payos-webhook", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("🚀 Server running on http://localhost:3000"));
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
