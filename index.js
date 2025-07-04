@@ -61,7 +61,7 @@ app.post("/create-order", async (req, res) => {
     const orderCode = `ORDER_${userId}_${Date.now()}`;
 
     const response = await axios.post(
-      "https://api.payos.io/v2/payment-requests",
+      "https://125.235.4.59/v2/payment-requests",
       {
         orderCode: orderCode,
         amount: 20000, // 20,000 VND
